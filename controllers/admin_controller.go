@@ -124,7 +124,7 @@ func (c *AdminController) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	middleware.SetCookie(w, c.Cfg.CookieName, token)
+	middleware.SetCookie(w, c.Cfg.CookieName, token, c.Cfg.RecoveryCookieSecure)
 
 	utils.Success(w, http.StatusOK, "login successful", nil)
 }
@@ -141,7 +141,7 @@ func (c *AdminController) Logout(w http.ResponseWriter, r *http.Request) {
 			time.Now().Unix(),
 			utils.HashToken(cookie.Value))
 	}
-	middleware.ClearCookie(w, c.Cfg.CookieName)
+	middleware.ClearCookie(w, c.Cfg.CookieName, c.Cfg.RecoveryCookieSecure)
 
 	utils.Success(w, http.StatusOK, "logged out", nil)
 }
@@ -702,12 +702,12 @@ func (c *AdminController) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 	switch status {
 	case 1:
 		if err := c.auditPasswordReset(ctx, ownerType, &session.OwnerID, session.Phone, "otp_verified", getClientIP(r), r.UserAgent()); err != nil {
-			fmt.Printf("user password reset audit failed: %v\n", err)
+			fmt.Printf("admin password reset audit failed: %v\n", err)
 		}
 		utils.Success(w, http.StatusOK, "otp verified successfully", models.AdminResetTokenResponse{ResetToken: resetToken})
 	case 0:
 		if err := c.auditPasswordReset(ctx, ownerType, &session.OwnerID, session.Phone, "otp_failed", getClientIP(r), r.UserAgent()); err != nil {
-			fmt.Printf("user password reset audit failed: %v\n", err)
+			fmt.Printf("admin password reset audit failed: %v\n", err)
 		}
 		utils.Error(w, http.StatusUnauthorized, "invalid otp")
 	case -1:
@@ -763,7 +763,7 @@ func (c *AdminController) ResetPassword(w http.ResponseWriter, r *http.Request) 
 	if status != 1 {
 		if session.OwnerID > 0 {
 			if auditErr := c.auditPasswordReset(ctx, ownerType, &session.OwnerID, session.Phone, "reset_failed", getClientIP(r), r.UserAgent()); auditErr != nil {
-				fmt.Printf("user password reset audit failed: %v\n", auditErr)
+				fmt.Printf("admin password reset audit failed: %v\n", auditErr)
 			}
 		}
 		switch status {
@@ -781,7 +781,7 @@ func (c *AdminController) ResetPassword(w http.ResponseWriter, r *http.Request) 
 
 	releaseClaim := func() {
 		if releaseErr := c.releaseResetClaim(ctx, sessionID, tokenHash); releaseErr != nil {
-			fmt.Printf("user password reset claim release failed: %v\n", releaseErr)
+			fmt.Printf("admin password reset claim release failed: %v\n", releaseErr)
 		}
 	}
 	// Only a valid reset token should trigger the expensive password hash.
@@ -849,7 +849,7 @@ func (c *AdminController) ResetPassword(w http.ResponseWriter, r *http.Request) 
 	// The token is claimed before the DB transaction, so concurrent reset requests
 	// cannot use it. Deleting the Redis key after commit makes it permanently one-time.
 	if err := c.consumeResetClaim(ctx, sessionID, tokenHash); err != nil {
-		fmt.Printf("user recovery session consumption failed: %v\n", err)
+		fmt.Printf("admin recovery session consumption failed: %v\n", err)
 	}
 	utils.ClearRecoveryCookie(w, cookieName, c.Cfg.RecoveryCookieSecure)
 	utils.Success(w, http.StatusOK, "password reset successful", nil)
