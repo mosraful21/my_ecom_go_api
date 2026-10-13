@@ -103,9 +103,6 @@ func (c *AuthRecoveryController) deleteRecoverySession(ctx context.Context, sess
 	).Err()
 }
 
-
-// verifyOTPScript atomically checks OTP state, increments failed attempts, and
-// issues the reset-token hash. It preserves the recovery key's remaining TTL.
 var verifyOTPScript = redis.NewScript(`
 local raw = redis.call('GET', KEYS[1])
 if not raw then return cjson.encode({status=-1}) end
@@ -135,8 +132,6 @@ redis.call('SET', KEYS[1], cjson.encode(s), 'PX', ttl)
 return cjson.encode({status=1, session=s})
 `)
 
-// claimResetScript atomically claims a valid reset token so concurrent requests
-// cannot reset the same account simultaneously.
 var claimResetScript = redis.NewScript(`
 local raw = redis.call('GET', KEYS[1])
 if not raw then return cjson.encode({status=-1}) end
@@ -175,8 +170,6 @@ if s.reset_token_hash ~= ARGV[1] or s.reset_in_progress ~= true then return 0 en
 return redis.call('DEL', KEYS[1])
 `)
 
-// forgotPasswordRateLimitScript atomically limits by owner phone and by IP.
-// KEYS[1] is scoped to user/admin phone; KEYS[2] is shared across both types.
 var forgotPasswordRateLimitScript = redis.NewScript(`
 local phoneCount = redis.call('INCR', KEYS[1])
 if phoneCount == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
@@ -198,8 +191,12 @@ func (c *AuthRecoveryController) verifyOTPAtomic(
 	var result recoveryScriptResult
 	raw, err := verifyOTPScript.Run(ctx, c.RDB, []string{recoveryKey(sessionID)},
 		ownerType, now, inputHash, resetTokenHash, config.MaxOTPAttempts, resetExpiresAt).Text()
-	if err != nil { return 0, result.Session, err }
-	if err := json.Unmarshal([]byte(raw), &result); err != nil { return 0, result.Session, err }
+	if err != nil {
+		return 0, result.Session, err
+	}
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return 0, result.Session, err
+	}
 	return result.Status, result.Session, nil
 }
 
@@ -208,8 +205,12 @@ func (c *AuthRecoveryController) claimResetTokenAtomic(
 ) (int, models.RecoverySession, error) {
 	var result recoveryScriptResult
 	raw, err := claimResetScript.Run(ctx, c.RDB, []string{recoveryKey(sessionID)}, ownerType, now, tokenHash).Text()
-	if err != nil { return 0, result.Session, err }
-	if err := json.Unmarshal([]byte(raw), &result); err != nil { return 0, result.Session, err }
+	if err != nil {
+		return 0, result.Session, err
+	}
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return 0, result.Session, err
+	}
 	return result.Status, result.Session, nil
 }
 
@@ -226,10 +227,11 @@ func (c *AuthRecoveryController) allowForgotPassword(ctx context.Context, ownerT
 	ipKey := "password_recovery_rate:ip:" + utils.HashPhone(c.Cfg.RecoverySecret, ip)
 	allowed, err := forgotPasswordRateLimitScript.Run(ctx, c.RDB, []string{phoneKey, ipKey},
 		config.ForgotPasswordCooldown, 15*60, config.MaxForgotPasswordRequests, 20).Int()
-	if err != nil { return false, err }
+	if err != nil {
+		return false, err
+	}
 	return allowed == 1, nil
 }
-
 
 var recordLoginFailureScript = redis.NewScript(`
 local phoneCount = redis.call('INCR', KEYS[1])
@@ -248,18 +250,24 @@ func (c *AuthRecoveryController) loginRateKeys(ownerType, phone, ip string) (str
 func (c *AuthRecoveryController) loginBlocked(ctx context.Context, ownerType, phone, ip string) (bool, error) {
 	phoneKey, ipKey := c.loginRateKeys(ownerType, phone, ip)
 	values, err := c.RDB.MGet(ctx, phoneKey, ipKey).Result()
-	if err != nil { return false, err }
+	if err != nil {
+		return false, err
+	}
 	phoneCount, ipCount := int64(0), int64(0)
 	if len(values) > 0 && values[0] != nil {
 		switch v := values[0].(type) {
-		case string: phoneCount, _ = strconv.ParseInt(v, 10, 64)
-		case int64: phoneCount = v
+		case string:
+			phoneCount, _ = strconv.ParseInt(v, 10, 64)
+		case int64:
+			phoneCount = v
 		}
 	}
 	if len(values) > 1 && values[1] != nil {
 		switch v := values[1].(type) {
-		case string: ipCount, _ = strconv.ParseInt(v, 10, 64)
-		case int64: ipCount = v
+		case string:
+			ipCount, _ = strconv.ParseInt(v, 10, 64)
+		case int64:
+			ipCount = v
 		}
 	}
 	return phoneCount >= 10 || ipCount >= 50, nil

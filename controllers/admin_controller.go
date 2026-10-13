@@ -3,9 +3,9 @@ package controllers
 import (
 	"database/sql"
 	"encoding/json"
-	"io"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -74,10 +74,12 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
+
 	if err := decoder.Decode(dst); err != nil {
 		utils.Error(w, http.StatusBadRequest, "invalid request")
 		return false
 	}
+
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
 		utils.Error(w, http.StatusBadRequest, "request must contain a single JSON object")
@@ -93,7 +95,6 @@ func (c *AdminController) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q.Phone = strings.TrimSpace(q.Phone)
-
 	if q.Phone == "" || q.Password == "" {
 		utils.Error(w, http.StatusBadRequest, "phone and password are required")
 		return
@@ -101,10 +102,12 @@ func (c *AdminController) Login(w http.ResponseWriter, r *http.Request) {
 
 	ip := getClientIP(r)
 	blocked, rateErr := c.loginBlocked(r.Context(), "admin", q.Phone, ip)
+
 	if rateErr != nil {
 		utils.Error(w, http.StatusServiceUnavailable, "login temporarily unavailable")
 		return
 	}
+
 	if blocked {
 		utils.Error(w, http.StatusTooManyRequests, "too many login attempts; try again later")
 		return
@@ -138,6 +141,7 @@ func (c *AdminController) Login(w http.ResponseWriter, r *http.Request) {
 		utils.Error(w, http.StatusInternalServerError, "login failed")
 		return
 	}
+
 	if !utils.CheckPassword(a.Password, q.Password) {
 		if rateErr := c.recordFailedLogin(r.Context(), "admin", q.Phone, ip); rateErr != nil {
 			fmt.Printf("admin login throttle update failed: %v\n", rateErr)
@@ -152,15 +156,16 @@ func (c *AdminController) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	token, err := middleware.CreateSession(c.DB, config.TypeAdmin, a.ID)
-
 	if err != nil {
 		utils.Error(w, http.StatusInternalServerError, "session creation failed")
 		return
 	}
 
-	if err := c.clearLoginPhoneFailures(r.Context(), "admin", q.Phone); err != nil { fmt.Printf("admin login throttle reset failed: %v\n", err) }
-	middleware.SetCookie(w, c.Cfg.CookieName, token, c.Cfg.RecoveryCookieSecure)
+	if err := c.clearLoginPhoneFailures(r.Context(), "admin", q.Phone); err != nil {
+		fmt.Printf("admin login throttle reset failed: %v\n", err)
+	}
 
+	middleware.SetCookie(w, c.Cfg.CookieName, token, c.Cfg.RecoveryCookieSecure)
 	utils.Success(w, http.StatusOK, "login successful", nil)
 }
 
@@ -209,7 +214,6 @@ func (c *AdminController) GetMe(w http.ResponseWriter, r *http.Request) {
 			utils.Error(w, http.StatusNotFound, "admin not found")
 			return
 		}
-
 		utils.Error(w, http.StatusInternalServerError, "failed to get admin")
 		return
 	}
@@ -382,7 +386,6 @@ func (c *AdminController) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		if imageChanged {
 			_ = utils.DeleteImage(c.Cfg.StoragePath, "admin", newImage)
 		}
-
 		utils.Error(w, http.StatusConflict, "update failed")
 		return
 	}
@@ -393,7 +396,6 @@ func (c *AdminController) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		if imageChanged {
 			_ = utils.DeleteImage(c.Cfg.StoragePath, "admin", newImage)
 		}
-
 		utils.Error(w, http.StatusInternalServerError, "failed to check update")
 		return
 	}
@@ -402,7 +404,6 @@ func (c *AdminController) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		if imageChanged {
 			_ = utils.DeleteImage(c.Cfg.StoragePath, "admin", newImage)
 		}
-
 		utils.Error(w, http.StatusNotFound, "admin not found")
 		return
 	}
@@ -578,20 +579,26 @@ func (c *AdminController) ForgotPassword(w http.ResponseWriter, r *http.Request)
 	userAgent := r.UserAgent()
 
 	allowed, rateErr := c.allowForgotPassword(ctx, ownerType, phone, ip)
-	if rateErr != nil || !allowed {
-		genericResponse()
+	if rateErr != nil {
+		fmt.Printf("forgot password rate limiter failed: %v\n", rateErr)
+		utils.Error(w, http.StatusInternalServerError, "failed to process request")
 		return
 	}
 
-	var userID int64
+	if !allowed {
+		utils.Error(w, http.StatusTooManyRequests, "too many password recovery requests")
+		return
+	}
+
+	var adminID int64
 	err := c.DB.QueryRowContext(
 		ctx,
 		`SELECT id
-		 FROM users
+		 FROM admin
 		 WHERE phone = ?
 		 LIMIT 1`,
 		phone,
-	).Scan(&userID)
+	).Scan(&adminID)
 
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -617,7 +624,7 @@ func (c *AdminController) ForgotPassword(w http.ResponseWriter, r *http.Request)
 		   AND event_type = 'requested'
 		   AND created_at >= ?`,
 		ownerType,
-		userID,
+		adminID,
 		time.Now().Unix()-config.ForgotPasswordCooldown,
 	).Scan(&requestCount)
 
@@ -628,11 +635,11 @@ func (c *AdminController) ForgotPassword(w http.ResponseWriter, r *http.Request)
 
 	if requestCount >= config.MaxForgotPasswordRequests {
 		if auditErr := c.auditPasswordReset(
-			ctx, ownerType, &userID, phone, "rate_limited", ip, userAgent,
+			ctx, ownerType, &adminID, phone, "rate_limited", ip, userAgent,
 		); auditErr != nil {
-			fmt.Printf("password reset audit failed: %v", auditErr)
+			fmt.Printf("password reset audit failed: %v\n", auditErr)
 		}
-		genericResponse()
+		utils.Error(w, http.StatusTooManyRequests, "too many password recovery requests")
 		return
 	}
 
@@ -651,7 +658,7 @@ func (c *AdminController) ForgotPassword(w http.ResponseWriter, r *http.Request)
 	now := time.Now().Unix()
 	session := models.RecoverySession{
 		OwnerType:           ownerType,
-		OwnerID:             userID,
+		OwnerID:             adminID,
 		Phone:               phone,
 		OTPHash:             utils.HashOTP(c.Cfg.RecoverySecret, sessionID, otp),
 		OTPExpiresAt:        now + config.OTPExpirySeconds,
@@ -667,7 +674,7 @@ func (c *AdminController) ForgotPassword(w http.ResponseWriter, r *http.Request)
 	}
 
 	if err := c.auditPasswordReset(
-		ctx, ownerType, &userID, phone, "requested", ip, userAgent,
+		ctx, ownerType, &adminID, phone, "requested", ip, userAgent,
 	); err != nil {
 		_ = c.deleteRecoverySession(ctx, sessionID)
 		utils.Error(w, http.StatusInternalServerError, "failed to process request")
@@ -694,7 +701,6 @@ func (c *AdminController) ForgotPassword(w http.ResponseWriter, r *http.Request)
 	} else if strings.EqualFold(c.Cfg.AppEnv, "development") {
 		fmt.Printf("[DEV ONLY] user password reset OTP: %s (expires in %d seconds)\n", otp, config.OTPExpirySeconds)
 	} else {
-		// Never log OTPs outside development. Without an SMS provider, fail closed.
 		_ = c.deleteRecoverySession(ctx, sessionID)
 		genericResponse()
 		return
@@ -710,8 +716,11 @@ func (c *AdminController) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		utils.Error(w, http.StatusServiceUnavailable, "password recovery is not configured")
 		return
 	}
+
 	var req models.AdminVerifyOTPRequest
-	if !decodeJSON(w, r, &req) { return }
+	if !decodeJSON(w, r, &req) {
+		return
+	}
 
 	otp := strings.TrimSpace(req.OTP)
 	if !utils.ValidateOTPFormat(otp) {
@@ -721,6 +730,7 @@ func (c *AdminController) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 
 	const ownerType = "admin"
 	const cookieName = "admin_password_recovery"
+
 	sessionID, err := utils.GetRecoveryCookie(r, cookieName)
 	if err != nil {
 		utils.Error(w, http.StatusUnauthorized, "recovery session required")
@@ -733,6 +743,7 @@ func (c *AdminController) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		utils.Error(w, http.StatusInternalServerError, "reset token creation failed")
 		return
 	}
+
 	inputHash := utils.HashOTP(c.Cfg.RecoverySecret, sessionID, otp)
 	resetHash := utils.HashResetToken(c.Cfg.RecoverySecret, sessionID, resetToken)
 
@@ -776,8 +787,11 @@ func (c *AdminController) ResetPassword(w http.ResponseWriter, r *http.Request) 
 		utils.Error(w, http.StatusServiceUnavailable, "password recovery is not configured")
 		return
 	}
+
 	var req models.AdminResetPasswordRequest
-	if !decodeJSON(w, r, &req) { return }
+	if !decodeJSON(w, r, &req) {
+		return
+	}
 
 	resetToken := strings.TrimSpace(req.ResetToken)
 	password := req.Password
@@ -785,6 +799,7 @@ func (c *AdminController) ResetPassword(w http.ResponseWriter, r *http.Request) 
 		utils.Error(w, http.StatusBadRequest, "reset_token is required")
 		return
 	}
+
 	if err := utils.ValidatePassword(password); err != nil {
 		utils.Error(w, http.StatusBadRequest, err.Error())
 		return
@@ -792,6 +807,7 @@ func (c *AdminController) ResetPassword(w http.ResponseWriter, r *http.Request) 
 
 	const ownerType = "admin"
 	const cookieName = "admin_password_recovery"
+
 	sessionID, err := utils.GetRecoveryCookie(r, cookieName)
 	if err != nil {
 		utils.Error(w, http.StatusUnauthorized, "recovery session required")
@@ -805,6 +821,7 @@ func (c *AdminController) ResetPassword(w http.ResponseWriter, r *http.Request) 
 		utils.Error(w, http.StatusInternalServerError, "failed to validate reset token")
 		return
 	}
+
 	if status != 1 {
 		if session.OwnerID > 0 {
 			if auditErr := c.auditPasswordReset(ctx, ownerType, &session.OwnerID, session.Phone, "reset_failed", getClientIP(r), r.UserAgent()); auditErr != nil {
@@ -829,13 +846,14 @@ func (c *AdminController) ResetPassword(w http.ResponseWriter, r *http.Request) 
 			fmt.Printf("admin password reset claim release failed: %v\n", releaseErr)
 		}
 	}
-	// Only a valid reset token should trigger the expensive password hash.
+
 	passwordHash, err := utils.HashPassword(password)
 	if err != nil {
 		releaseClaim()
 		utils.Error(w, http.StatusInternalServerError, "password reset failed")
 		return
 	}
+
 	tx, err := c.DB.BeginTx(ctx, nil)
 	if err != nil {
 		releaseClaim()
@@ -848,12 +866,14 @@ func (c *AdminController) ResetPassword(w http.ResponseWriter, r *http.Request) 
 		`UPDATE admin SET password = ?, version = version + 1, updated_at = ? WHERE id = ?`,
 		passwordHash, now, session.OwnerID,
 	)
+
 	if err != nil {
 		tx.Rollback()
 		releaseClaim()
 		utils.Error(w, http.StatusInternalServerError, "password reset failed")
 		return
 	}
+
 	rowsAffected, err := result.RowsAffected()
 	if err != nil || rowsAffected != 1 {
 		tx.Rollback()
@@ -886,16 +906,14 @@ func (c *AdminController) ResetPassword(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := tx.Commit(); err != nil {
-		// Commit errors can be ambiguous: keep the claim locked to prevent token replay.
 		utils.Error(w, http.StatusInternalServerError, "password reset failed")
 		return
 	}
 
-	// The token is claimed before the DB transaction, so concurrent reset requests
-	// cannot use it. Deleting the Redis key after commit makes it permanently one-time.
 	if err := c.consumeResetClaim(ctx, sessionID, tokenHash); err != nil {
 		fmt.Printf("admin recovery session consumption failed: %v\n", err)
 	}
+
 	utils.ClearRecoveryCookie(w, cookieName, c.Cfg.RecoveryCookieSecure)
 	utils.Success(w, http.StatusOK, "password reset successful", nil)
 }
@@ -942,8 +960,6 @@ func (c *AdminController) CreateAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	now := time.Now().Unix()
-
 	result, err := c.DB.ExecContext(
 		r.Context(),
 		`INSERT INTO admin
@@ -956,8 +972,8 @@ func (c *AdminController) CreateAdmin(w http.ResponseWriter, r *http.Request) {
 		q.Role,
 		config.StatusActive,
 		1,
-		now,
-		now,
+		time.Now().Unix(),
+		time.Now().Unix(),
 	)
 
 	if err != nil {
@@ -996,7 +1012,6 @@ func (c *AdminController) CreateAdmin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *AdminController) GetAdmin(w http.ResponseWriter, r *http.Request) {
-
 	params := utils.GetQueryParams(r, c.Cfg.PaginationLimit)
 	qb := utils.NewQueryBuilder()
 
@@ -1033,7 +1048,6 @@ func (c *AdminController) GetAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	orderBy := utils.GetOrder(params.Sort, params.Order, allowedSort, "id")
-
 	query := adminSelect + where + orderBy + ` LIMIT ? OFFSET ?`
 	args := append(qb.Args, params.Limit, params.Offset)
 
@@ -1052,12 +1066,10 @@ func (c *AdminController) GetAdmin(w http.ResponseWriter, r *http.Request) {
 
 	for rows.Next() {
 		var a models.Admin
-
 		if err := scanAdmin(rows, &a); err != nil {
 			utils.Error(w, http.StatusInternalServerError, "failed to read admins")
 			return
 		}
-
 		admins = append(admins, a)
 	}
 
@@ -1296,7 +1308,6 @@ func (c *AdminController) Update(w http.ResponseWriter, r *http.Request) {
 		if imageChanged {
 			_ = utils.DeleteImage(c.Cfg.StoragePath, "admin", newImage)
 		}
-
 		utils.Error(w, http.StatusBadRequest, "nothing to update")
 		return
 	}
@@ -1313,13 +1324,11 @@ func (c *AdminController) Update(w http.ResponseWriter, r *http.Request) {
 		if imageChanged {
 			_ = utils.DeleteImage(c.Cfg.StoragePath, "admin", newImage)
 		}
-
 		var mysqlErr *mysql.MySQLError
 		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
 			utils.Error(w, http.StatusConflict, "phone number already exists")
 			return
 		}
-
 		utils.Error(w, http.StatusInternalServerError, "failed to update admin")
 		return
 	}
@@ -1329,7 +1338,6 @@ func (c *AdminController) Update(w http.ResponseWriter, r *http.Request) {
 		if imageChanged {
 			_ = utils.DeleteImage(c.Cfg.StoragePath, "admin", newImage)
 		}
-
 		utils.Error(w, http.StatusInternalServerError, "failed to check update")
 		return
 	}

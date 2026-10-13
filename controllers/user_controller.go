@@ -70,11 +70,8 @@ func scanUser(s rowScanner, u *models.User) error {
 	)
 }
 
-
-
 func (c *UserController) Register(w http.ResponseWriter, r *http.Request) {
 	var req models.UserRegisterRequest
-
 	if !decodeJSON(w, r, &req) {
 		return
 	}
@@ -152,7 +149,6 @@ func (c *UserController) Register(w http.ResponseWriter, r *http.Request) {
 
 func (c *UserController) Login(w http.ResponseWriter, r *http.Request) {
 	var req models.UserLoginRequest
-
 	if !decodeJSON(w, r, &req) {
 		return
 	}
@@ -167,10 +163,12 @@ func (c *UserController) Login(w http.ResponseWriter, r *http.Request) {
 
 	ip := getClientIP(r)
 	blocked, rateErr := c.loginBlocked(r.Context(), "user", phone, ip)
+
 	if rateErr != nil {
 		utils.Error(w, http.StatusServiceUnavailable, "login temporarily unavailable")
 		return
 	}
+
 	if blocked {
 		utils.Error(w, http.StatusTooManyRequests, "too many login attempts; try again later")
 		return
@@ -192,7 +190,9 @@ func (c *UserController) Login(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			if rateErr := c.recordFailedLogin(r.Context(), "user", phone, ip); rateErr != nil { fmt.Printf("user login throttle update failed: %v\n", rateErr) }
+			if rateErr := c.recordFailedLogin(r.Context(), "user", phone, ip); rateErr != nil {
+				fmt.Printf("user login throttle update failed: %v\n", rateErr)
+			}
 			utils.Error(w, http.StatusUnauthorized, "invalid credentials")
 			return
 		}
@@ -201,7 +201,9 @@ func (c *UserController) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !utils.CheckPassword(hash, password) {
-		if rateErr := c.recordFailedLogin(r.Context(), "user", phone, ip); rateErr != nil { fmt.Printf("user login throttle update failed: %v\n", rateErr) }
+		if rateErr := c.recordFailedLogin(r.Context(), "user", phone, ip); rateErr != nil {
+			fmt.Printf("user login throttle update failed: %v\n", rateErr)
+		}
 		utils.Error(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
@@ -217,9 +219,11 @@ func (c *UserController) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := c.clearLoginPhoneFailures(r.Context(), "user", phone); err != nil { fmt.Printf("user login throttle reset failed: %v\n", err) }
-	middleware.SetCookie(w, c.Cfg.CookieName, token, c.Cfg.RecoveryCookieSecure)
+	if err := c.clearLoginPhoneFailures(r.Context(), "user", phone); err != nil {
+		fmt.Printf("user login throttle reset failed: %v\n", err)
+	}
 
+	middleware.SetCookie(w, c.Cfg.CookieName, token, c.Cfg.RecoveryCookieSecure)
 	utils.Success(w, http.StatusOK, "login successful", nil)
 }
 
@@ -249,7 +253,6 @@ func (c *UserController) Logout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	middleware.ClearCookie(w, c.Cfg.CookieName, c.Cfg.RecoveryCookieSecure)
-
 	utils.Success(w, http.StatusOK, "logged out successfully", nil)
 }
 
@@ -631,6 +634,7 @@ func (c *UserController) ChangePassword(w http.ResponseWriter, r *http.Request) 
 
 func (c *UserController) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+
 	if len(c.Cfg.RecoverySecret) < 32 {
 		utils.Error(w, http.StatusServiceUnavailable, "password recovery is not configured")
 		return
@@ -660,9 +664,14 @@ func (c *UserController) ForgotPassword(w http.ResponseWriter, r *http.Request) 
 	userAgent := r.UserAgent()
 
 	allowed, rateErr := c.allowForgotPassword(ctx, ownerType, phone, ip)
-	if rateErr != nil || !allowed {
-		// Keep the response indistinguishable for unknown accounts and rate-limited requests.
-		genericResponse()
+	if rateErr != nil {
+		fmt.Printf("forgot password rate limiter failed: %v\n", rateErr)
+		utils.Error(w, http.StatusInternalServerError, "failed to process request")
+		return
+	}
+
+	if !allowed {
+		utils.Error(w, http.StatusTooManyRequests, "too many password recovery requests")
 		return
 	}
 
@@ -679,13 +688,21 @@ func (c *UserController) ForgotPassword(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			if auditErr := c.auditPasswordReset(
-				ctx, ownerType, nil, phone, "requested", ip, userAgent,
+				ctx,
+				ownerType,
+				nil,
+				phone,
+				"requested",
+				ip,
+				userAgent,
 			); auditErr != nil {
-				fmt.Printf("password reset audit failed: %v", auditErr)
+				fmt.Printf("password reset audit failed: %v\n", auditErr)
 			}
 			genericResponse()
 			return
 		}
+
+		fmt.Printf("user lookup failed: %v\n", err)
 		utils.Error(w, http.StatusInternalServerError, "failed to process request")
 		return
 	}
@@ -705,33 +722,44 @@ func (c *UserController) ForgotPassword(w http.ResponseWriter, r *http.Request) 
 	).Scan(&requestCount)
 
 	if err != nil {
+		fmt.Printf("password reset request count failed: %v\n", err)
 		utils.Error(w, http.StatusInternalServerError, "failed to process request")
 		return
 	}
 
 	if requestCount >= config.MaxForgotPasswordRequests {
 		if auditErr := c.auditPasswordReset(
-			ctx, ownerType, &userID, phone, "rate_limited", ip, userAgent,
+			ctx,
+			ownerType,
+			&userID,
+			phone,
+			"rate_limited",
+			ip,
+			userAgent,
 		); auditErr != nil {
-			fmt.Printf("password reset audit failed: %v", auditErr)
+			fmt.Printf("password reset audit failed: %v\n", auditErr)
 		}
-		genericResponse()
+
+		utils.Error(w, http.StatusTooManyRequests, "too many password recovery requests")
 		return
 	}
 
 	sessionID, err := utils.RandomRecoverySessionID()
 	if err != nil {
+		fmt.Printf("recovery session ID generation failed: %v\n", err)
 		utils.Error(w, http.StatusInternalServerError, "failed to process request")
 		return
 	}
 
 	otp, err := utils.RandomOTP(6)
 	if err != nil {
+		fmt.Printf("OTP generation failed: %v\n", err)
 		utils.Error(w, http.StatusInternalServerError, "failed to process request")
 		return
 	}
 
 	now := time.Now().Unix()
+
 	session := models.RecoverySession{
 		OwnerType:           ownerType,
 		OwnerID:             userID,
@@ -745,22 +773,28 @@ func (c *UserController) ForgotPassword(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := c.saveRecoverySession(ctx, sessionID, session); err != nil {
+		fmt.Printf("recovery session save failed: %v\n", err)
 		utils.Error(w, http.StatusInternalServerError, "failed to process request")
 		return
 	}
 
 	if err := c.auditPasswordReset(
-		ctx, ownerType, &userID, phone, "requested", ip, userAgent,
+		ctx,
+		ownerType,
+		&userID,
+		phone,
+		"requested",
+		ip,
+		userAgent,
 	); err != nil {
 		_ = c.deleteRecoverySession(ctx, sessionID)
+
+		fmt.Printf("password reset audit failed: %v\n", err)
 		utils.Error(w, http.StatusInternalServerError, "failed to process request")
 		return
 	}
 
-	message := fmt.Sprintf(
-		"My Shop: Your password reset OTP is %s. Valid for 5 minutes.",
-		otp,
-	)
+	message := fmt.Sprintf("My Shop: Your password reset OTP is %s. Valid for 5 minutes.", otp)
 
 	if c.Cfg.SMSEnabled {
 		_, err = utils.SendSMS(
@@ -770,14 +804,18 @@ func (c *UserController) ForgotPassword(w http.ResponseWriter, r *http.Request) 
 			message,
 		)
 		if err != nil {
+			fmt.Printf("password reset SMS delivery failed: %v\n", err)
 			_ = c.deleteRecoverySession(ctx, sessionID)
 			genericResponse()
 			return
 		}
 	} else if strings.EqualFold(c.Cfg.AppEnv, "development") {
-		fmt.Printf("[DEV ONLY] user password reset OTP: %s (expires in %d seconds)\n", otp, config.OTPExpirySeconds)
+		fmt.Printf(
+			"[DEV ONLY] user password reset OTP: %s (expires in %d seconds)\n",
+			otp,
+			config.OTPExpirySeconds,
+		)
 	} else {
-		// Never log OTPs outside development. Without an SMS provider, fail closed.
 		_ = c.deleteRecoverySession(ctx, sessionID)
 		genericResponse()
 		return
@@ -793,8 +831,11 @@ func (c *UserController) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		utils.Error(w, http.StatusServiceUnavailable, "password recovery is not configured")
 		return
 	}
+
 	var req models.UserVerifyOTPRequest
-	if !decodeJSON(w, r, &req) { return }
+	if !decodeJSON(w, r, &req) {
+		return
+	}
 
 	otp := strings.TrimSpace(req.OTP)
 	if !utils.ValidateOTPFormat(otp) {
@@ -804,6 +845,7 @@ func (c *UserController) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 
 	const ownerType = "user"
 	const cookieName = "user_password_recovery"
+
 	sessionID, err := utils.GetRecoveryCookie(r, cookieName)
 	if err != nil {
 		utils.Error(w, http.StatusUnauthorized, "recovery session required")
@@ -816,6 +858,7 @@ func (c *UserController) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		utils.Error(w, http.StatusInternalServerError, "reset token creation failed")
 		return
 	}
+
 	inputHash := utils.HashOTP(c.Cfg.RecoverySecret, sessionID, otp)
 	resetHash := utils.HashResetToken(c.Cfg.RecoverySecret, sessionID, resetToken)
 
@@ -859,8 +902,11 @@ func (c *UserController) ResetPassword(w http.ResponseWriter, r *http.Request) {
 		utils.Error(w, http.StatusServiceUnavailable, "password recovery is not configured")
 		return
 	}
+
 	var req models.UserResetPasswordRequest
-	if !decodeJSON(w, r, &req) { return }
+	if !decodeJSON(w, r, &req) {
+		return
+	}
 
 	resetToken := strings.TrimSpace(req.ResetToken)
 	password := req.Password
@@ -868,6 +914,7 @@ func (c *UserController) ResetPassword(w http.ResponseWriter, r *http.Request) {
 		utils.Error(w, http.StatusBadRequest, "reset_token is required")
 		return
 	}
+
 	if err := utils.ValidatePassword(password); err != nil {
 		utils.Error(w, http.StatusBadRequest, err.Error())
 		return
@@ -875,6 +922,7 @@ func (c *UserController) ResetPassword(w http.ResponseWriter, r *http.Request) {
 
 	const ownerType = "user"
 	const cookieName = "user_password_recovery"
+
 	sessionID, err := utils.GetRecoveryCookie(r, cookieName)
 	if err != nil {
 		utils.Error(w, http.StatusUnauthorized, "recovery session required")
@@ -882,12 +930,15 @@ func (c *UserController) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tokenHash := utils.HashResetToken(c.Cfg.RecoverySecret, sessionID, resetToken)
+
 	now := time.Now().Unix()
+
 	status, session, err := c.claimResetTokenAtomic(ctx, sessionID, ownerType, tokenHash, now)
 	if err != nil {
 		utils.Error(w, http.StatusInternalServerError, "failed to validate reset token")
 		return
 	}
+
 	if status != 1 {
 		if session.OwnerID > 0 {
 			if auditErr := c.auditPasswordReset(ctx, ownerType, &session.OwnerID, session.Phone, "reset_failed", getClientIP(r), r.UserAgent()); auditErr != nil {
@@ -912,13 +963,14 @@ func (c *UserController) ResetPassword(w http.ResponseWriter, r *http.Request) {
 			fmt.Printf("user password reset claim release failed: %v\n", releaseErr)
 		}
 	}
-	// Only a valid reset token should trigger the expensive password hash.
+
 	passwordHash, err := utils.HashPassword(password)
 	if err != nil {
 		releaseClaim()
 		utils.Error(w, http.StatusInternalServerError, "password reset failed")
 		return
 	}
+
 	tx, err := c.DB.BeginTx(ctx, nil)
 	if err != nil {
 		releaseClaim()
@@ -937,6 +989,7 @@ func (c *UserController) ResetPassword(w http.ResponseWriter, r *http.Request) {
 		utils.Error(w, http.StatusInternalServerError, "password reset failed")
 		return
 	}
+
 	rowsAffected, err := result.RowsAffected()
 	if err != nil || rowsAffected != 1 {
 		tx.Rollback()
@@ -969,16 +1022,14 @@ func (c *UserController) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := tx.Commit(); err != nil {
-		// Commit errors can be ambiguous: keep the claim locked to prevent token replay.
 		utils.Error(w, http.StatusInternalServerError, "password reset failed")
 		return
 	}
 
-	// The token is claimed before the DB transaction, so concurrent reset requests
-	// cannot use it. Deleting the Redis key after commit makes it permanently one-time.
 	if err := c.consumeResetClaim(ctx, sessionID, tokenHash); err != nil {
 		fmt.Printf("user recovery session consumption failed: %v\n", err)
 	}
+
 	utils.ClearRecoveryCookie(w, cookieName, c.Cfg.RecoveryCookieSecure)
 	utils.Success(w, http.StatusOK, "password reset successful", nil)
 }
@@ -1048,12 +1099,10 @@ func (c *UserController) GetUsers(w http.ResponseWriter, r *http.Request) {
 
 	for rows.Next() {
 		var u models.User
-
 		if err := scanUser(rows, &u); err != nil {
 			utils.Error(w, http.StatusInternalServerError, "failed to read users")
 			return
 		}
-
 		users = append(users, u)
 	}
 
@@ -1092,7 +1141,6 @@ func (c *UserController) GetUserById(w http.ResponseWriter, r *http.Request) {
 			utils.Error(w, http.StatusNotFound, "user not found")
 			return
 		}
-
 		utils.Error(w, http.StatusInternalServerError, "failed to get user")
 		return
 	}
@@ -1390,6 +1438,7 @@ func (c *UserController) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 		utils.Error(w, http.StatusInternalServerError, "failed to check update")
 		return
 	}
+
 	if affected == 0 {
 		utils.Error(w, http.StatusNotFound, "user not found")
 		return

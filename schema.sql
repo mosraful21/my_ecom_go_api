@@ -89,6 +89,3 @@ CREATE TABLE
     updated_at BIGINT NOT NULL,
     INDEX idx_products_status (status)
   ) ENGINE = InnoDB;
-
-
--- Create the first administrator with: go run ./cmd/bootstrap-admin

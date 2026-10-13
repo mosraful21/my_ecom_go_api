@@ -51,8 +51,8 @@ func ValidatePhone(phone string) error {
 }
 
 func ValidatePassword(password string) error {
-	if len(password) < 8 {
-		return fmt.Errorf("password must be at least 8 characters")
+	if len(password) < 6 {
+		return fmt.Errorf("password must be at least 6 characters")
 	}
 	if len([]byte(password)) > 72 {
 		return fmt.Errorf("password must not exceed 72 bytes")
@@ -93,7 +93,6 @@ func SaveImage(file multipart.File, header *multipart.FileHeader, storagePath st
 	}
 
 	randomBytes := make([]byte, 16)
-
 	if _, err := rand.Read(randomBytes); err != nil {
 		return "", err
 	}
@@ -101,18 +100,15 @@ func SaveImage(file multipart.File, header *multipart.FileHeader, storagePath st
 	filename := hex.EncodeToString(randomBytes) + ext
 
 	dir := filepath.Join(storagePath, folder)
-
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", err
 	}
 
 	path := filepath.Join(dir, filename)
-
 	dst, err := os.Create(path)
 	if err != nil {
 		return "", err
 	}
-
 	defer dst.Close()
 
 	if _, err := io.Copy(dst, file); err != nil {
@@ -137,7 +133,6 @@ func DeleteImage(storagePath string, folder string, filename string) error {
 		folder,
 		filename,
 	)
-
 	err := os.Remove(path)
 
 	if os.IsNotExist(err) {

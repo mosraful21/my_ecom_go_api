@@ -44,7 +44,8 @@ func SetCookie(w http.ResponseWriter, name, token string, secure bool) {
 		Path:     "/",
 		MaxAge:   int(SessionTTL.Seconds()),
 		HttpOnly: true,
-		Secure:   secure,
+		// Secure:   secure, // for production lavel
+		Secure:   false,
 		SameSite: http.SameSiteLaxMode,
 	})
 }

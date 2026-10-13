@@ -10,17 +10,17 @@ import (
 )
 
 const (
-	TypeAdmin          = 1
-	TypeUser           = 2
+	TypeAdmin = 1
+	TypeUser  = 2
+
 	AdminRoleAdmin     = 1
 	AdminRoleManager   = 2
 	AdminRoleModerator = 3
-	StatusActive       = 1
-	StatusInactive     = 2
-	StatusBan          = 3
-)
 
-const (
+	StatusActive   = 1
+	StatusInactive = 2
+	StatusBan      = 3
+
 	RecoverySessionTTL        = 5 * 60
 	OTPExpirySeconds          = 5 * 60
 	MaxOTPAttempts            = 3
@@ -40,21 +40,19 @@ type Config struct {
 	DBUser     string
 	DBPassword string
 
-	StoragePath string
-	CookieName  string
-
-	PaginationLimit int
-
-	SMSAPIKey string
-	SMSAPIURL string
-
 	RedisAddr     string
 	RedisPassword string
 	RedisDB       int
 
-	RecoverySecret string
-	SMSEnabled     bool
+	CookieName      string
+	StoragePath     string
+	PaginationLimit int
 
+	SMSEnabled bool
+	SMSAPIKey  string
+	SMSAPIURL  string
+
+	RecoverySecret       string
 	RecoveryCookieSecure bool
 }
 
@@ -72,21 +70,19 @@ func Load() (*Config, error) {
 		DBUser:     get("DB_USER", "root"),
 		DBPassword: os.Getenv("DB_PASSWORD"),
 
-		StoragePath: get("STORAGE_PATH", "./storage"),
-		CookieName:  get("COOKIE_NAME", "my_shop_session"),
-
-		PaginationLimit: getInt("PAGINATION_LIMIT", 50),
-
-		SMSAPIKey: os.Getenv("SMS_API_KEY"),
-		SMSAPIURL: os.Getenv("SMS_API_URL"),
-
 		RedisAddr:     get("REDIS_ADDR", "127.0.0.1:6379"),
 		RedisPassword: get("REDIS_PASSWORD", ""),
 		RedisDB:       getIntAllowZero("REDIS_DB", 0),
 
-		RecoverySecret: os.Getenv("RECOVERY_SECRET"),
-		SMSEnabled:     getBool("SMS_ENABLED", false),
+		CookieName:      get("COOKIE_NAME", "my_shop_session"),
+		StoragePath:     get("STORAGE_PATH", "./storage"),
+		PaginationLimit: getInt("PAGINATION_LIMIT", 50),
 
+		SMSEnabled: getBool("SMS_ENABLED", false),
+		SMSAPIKey:  os.Getenv("SMS_API_KEY"),
+		SMSAPIURL:  os.Getenv("SMS_API_URL"),
+
+		RecoverySecret:       os.Getenv("RECOVERY_SECRET"),
 		RecoveryCookieSecure: getBool("RECOVERY_COOKIE_SECURE", true),
 	}
 
