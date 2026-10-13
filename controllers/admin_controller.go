@@ -99,6 +99,17 @@ func (c *AdminController) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ip := getClientIP(r)
+	blocked, rateErr := c.loginBlocked(r.Context(), "admin", q.Phone, ip)
+	if rateErr != nil {
+		utils.Error(w, http.StatusServiceUnavailable, "login temporarily unavailable")
+		return
+	}
+	if blocked {
+		utils.Error(w, http.StatusTooManyRequests, "too many login attempts; try again later")
+		return
+	}
+
 	var a models.Admin
 
 	err := c.DB.QueryRowContext(
@@ -117,6 +128,7 @@ func (c *AdminController) Login(w http.ResponseWriter, r *http.Request) {
 	)
 
 	if err != nil || !utils.CheckPassword(a.Password, q.Password) {
+		if rateErr := c.recordFailedLogin(r.Context(), "admin", q.Phone, ip); rateErr != nil { fmt.Printf("admin login throttle update failed: %v\n", rateErr) }
 		utils.Error(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
@@ -133,6 +145,7 @@ func (c *AdminController) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := c.clearLoginPhoneFailures(r.Context(), "admin", q.Phone); err != nil { fmt.Printf("admin login throttle reset failed: %v\n", err) }
 	middleware.SetCookie(w, c.Cfg.CookieName, token, c.Cfg.RecoveryCookieSecure)
 
 	utils.Success(w, http.StatusOK, "login successful", nil)
