@@ -1,8 +1,10 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -86,6 +88,18 @@ func Load() (*Config, error) {
 		SMSEnabled:     getBool("SMS_ENABLED", false),
 
 		RecoveryCookieSecure: getBool("RECOVERY_COOKIE_SECURE", true),
+	}
+
+	if strings.EqualFold(c.AppEnv, "production") {
+		if len(c.RecoverySecret) < 32 {
+			return nil, errors.New("RECOVERY_SECRET must be at least 32 bytes in production")
+		}
+		if !c.RecoveryCookieSecure {
+			return nil, errors.New("RECOVERY_COOKIE_SECURE must be true in production")
+		}
+		if c.SMSEnabled && (strings.TrimSpace(c.SMSAPIURL) == "" || strings.TrimSpace(c.SMSAPIKey) == "") {
+			return nil, errors.New("SMS_API_URL and SMS_API_KEY are required when SMS_ENABLED=true")
+		}
 	}
 
 	return c, nil
