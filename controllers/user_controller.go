@@ -904,12 +904,14 @@ func (c *UserController) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		passwordHash, now, session.OwnerID,
 	)
 	if err != nil {
+		tx.Rollback()
 		releaseClaim()
 		utils.Error(w, http.StatusInternalServerError, "password reset failed")
 		return
 	}
 	rowsAffected, err := result.RowsAffected()
 	if err != nil || rowsAffected != 1 {
+		tx.Rollback()
 		releaseClaim()
 		utils.Error(w, http.StatusUnauthorized, "invalid recovery session")
 		return
@@ -919,6 +921,7 @@ func (c *UserController) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		`UPDATE auth_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`,
 		now, session.OwnerID,
 	); err != nil {
+		tx.Rollback()
 		releaseClaim()
 		utils.Error(w, http.StatusInternalServerError, "password reset failed")
 		return
@@ -931,6 +934,7 @@ func (c *UserController) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		ownerType, session.OwnerID, utils.HashPhone(c.Cfg.RecoverySecret, session.Phone),
 		"reset_success", getClientIP(r), r.UserAgent(), now,
 	); err != nil {
+		tx.Rollback()
 		releaseClaim()
 		utils.Error(w, http.StatusInternalServerError, "password reset failed")
 		return
