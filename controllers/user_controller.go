@@ -853,12 +853,6 @@ func (c *UserController) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	passwordHash, err := utils.HashPassword(password)
-	if err != nil {
-		utils.Error(w, http.StatusInternalServerError, "password reset failed")
-		return
-	}
-
 	tokenHash := utils.HashResetToken(c.Cfg.RecoverySecret, sessionID, resetToken)
 	now := time.Now().Unix()
 	status, session, err := c.claimResetTokenAtomic(ctx, sessionID, ownerType, tokenHash, now)
@@ -889,6 +883,13 @@ func (c *UserController) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 		if releaseErr := c.releaseResetClaim(ctx, sessionID, tokenHash); releaseErr != nil {
 			fmt.Printf("user password reset claim release failed: %v\n", releaseErr)
 		}
+	}
+	// Only a valid reset token should trigger the expensive password hash.
+	passwordHash, err := utils.HashPassword(password)
+	if err != nil {
+		releaseClaim()
+		utils.Error(w, http.StatusInternalServerError, "password reset failed")
+		return
 	}
 	tx, err := c.DB.BeginTx(ctx, nil)
 	if err != nil {
