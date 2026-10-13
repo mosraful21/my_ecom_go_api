@@ -160,6 +160,17 @@ func (c *UserController) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ip := getClientIP(r)
+	blocked, rateErr := c.loginBlocked(r.Context(), "user", phone, ip)
+	if rateErr != nil {
+		utils.Error(w, http.StatusServiceUnavailable, "login temporarily unavailable")
+		return
+	}
+	if blocked {
+		utils.Error(w, http.StatusTooManyRequests, "too many login attempts; try again later")
+		return
+	}
+
 	var (
 		id     int64
 		hash   string
@@ -176,6 +187,7 @@ func (c *UserController) Login(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			if rateErr := c.recordFailedLogin(r.Context(), "user", phone, ip); rateErr != nil { fmt.Printf("user login throttle update failed: %v\n", rateErr) }
 			utils.Error(w, http.StatusUnauthorized, "invalid credentials")
 			return
 		}
@@ -184,6 +196,7 @@ func (c *UserController) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !utils.CheckPassword(hash, password) {
+		if rateErr := c.recordFailedLogin(r.Context(), "user", phone, ip); rateErr != nil { fmt.Printf("user login throttle update failed: %v\n", rateErr) }
 		utils.Error(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
@@ -199,6 +212,7 @@ func (c *UserController) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := c.clearLoginPhoneFailures(r.Context(), "user", phone); err != nil { fmt.Printf("user login throttle reset failed: %v\n", err) }
 	middleware.SetCookie(w, c.Cfg.CookieName, token, c.Cfg.RecoveryCookieSecure)
 
 	utils.Success(w, http.StatusOK, "login successful", nil)
