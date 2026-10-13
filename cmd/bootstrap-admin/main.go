@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"database/sql"
 	"os"
 	"strings"
 	"time"
@@ -35,6 +36,22 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.Close()
+
+	// Serialize bootstrap runs so two concurrent invocations cannot create
+	// multiple first administrators after both observe an empty table.
+	var lock sql.NullInt64
+	if err := db.QueryRow(`SELECT GET_LOCK(?, 10)`, "my_ecom_api_bootstrap_admin").Scan(&lock); err != nil {
+		log.Fatalf("failed to acquire bootstrap lock: %v", err)
+	}
+	if !lock.Valid || lock.Int64 != 1 {
+		log.Fatal("could not acquire bootstrap lock")
+	}
+	defer func() {
+		var released sql.NullInt64
+		if err := db.QueryRow(`SELECT RELEASE_LOCK(?)`, "my_ecom_api_bootstrap_admin").Scan(&released); err != nil {
+			log.Printf("warning: failed to release bootstrap lock: %v", err)
+		}
+	}()
 
 	var count int64
 	if err := db.QueryRow("SELECT COUNT(*) FROM admin").Scan(&count); err != nil {
