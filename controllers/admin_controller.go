@@ -899,6 +899,8 @@ func (c *AdminController) CreateAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	q.Name = strings.TrimSpace(q.Name)
+	q.Phone = strings.TrimSpace(q.Phone)
 	if q.Name == "" || q.Phone == "" || q.Password == "" {
 		utils.Error(w, http.StatusBadRequest, "name, phone and password are required")
 		return
@@ -946,7 +948,12 @@ func (c *AdminController) CreateAdmin(w http.ResponseWriter, r *http.Request) {
 	)
 
 	if err != nil {
-		utils.Error(w, http.StatusConflict, "phone already exists")
+		var mysqlErr *mysql.MySQLError
+		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+			utils.Error(w, http.StatusConflict, "phone number already exists")
+			return
+		}
+		utils.Error(w, http.StatusInternalServerError, "failed to create admin")
 		return
 	}
 
