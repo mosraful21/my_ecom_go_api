@@ -749,7 +749,7 @@ func (c *UserController) ForgotPassword(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	} else if strings.EqualFold(c.Cfg.AppEnv, "development") {
-		fmt.Printf("[DEV ONLY] user password reset OTP: %s (expires in %d seconds)\\n", otp, config.OTPExpirySeconds)
+		fmt.Printf("[DEV ONLY] user password reset OTP: %s (expires in %d seconds)\n", otp, config.OTPExpirySeconds)
 	} else {
 		// Never log OTPs outside development. Without an SMS provider, fail closed.
 		_ = c.deleteRecoverySession(ctx, sessionID)
