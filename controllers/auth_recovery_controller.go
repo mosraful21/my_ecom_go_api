@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -227,4 +228,49 @@ func (c *AuthRecoveryController) allowForgotPassword(ctx context.Context, ownerT
 		config.ForgotPasswordCooldown, 15*60, config.MaxForgotPasswordRequests, 20).Int()
 	if err != nil { return false, err }
 	return allowed == 1, nil
+}
+
+
+var recordLoginFailureScript = redis.NewScript(`
+local phoneCount = redis.call('INCR', KEYS[1])
+if phoneCount == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
+local ipCount = redis.call('INCR', KEYS[2])
+if ipCount == 1 then redis.call('EXPIRE', KEYS[2], ARGV[1]) end
+return {phoneCount, ipCount}
+`)
+
+func (c *AuthRecoveryController) loginRateKeys(ownerType, phone, ip string) (string, string) {
+	phoneKey := "login_fail:phone:" + ownerType + ":" + utils.HashPhone(c.Cfg.RecoverySecret, phone)
+	ipKey := "login_fail:ip:" + utils.HashPhone(c.Cfg.RecoverySecret, ip)
+	return phoneKey, ipKey
+}
+
+func (c *AuthRecoveryController) loginBlocked(ctx context.Context, ownerType, phone, ip string) (bool, error) {
+	phoneKey, ipKey := c.loginRateKeys(ownerType, phone, ip)
+	values, err := c.RDB.MGet(ctx, phoneKey, ipKey).Result()
+	if err != nil { return false, err }
+	phoneCount, ipCount := int64(0), int64(0)
+	if len(values) > 0 && values[0] != nil {
+		switch v := values[0].(type) {
+		case string: phoneCount, _ = strconv.ParseInt(v, 10, 64)
+		case int64: phoneCount = v
+		}
+	}
+	if len(values) > 1 && values[1] != nil {
+		switch v := values[1].(type) {
+		case string: ipCount, _ = strconv.ParseInt(v, 10, 64)
+		case int64: ipCount = v
+		}
+	}
+	return phoneCount >= 10 || ipCount >= 50, nil
+}
+
+func (c *AuthRecoveryController) recordFailedLogin(ctx context.Context, ownerType, phone, ip string) error {
+	phoneKey, ipKey := c.loginRateKeys(ownerType, phone, ip)
+	return recordLoginFailureScript.Run(ctx, c.RDB, []string{phoneKey, ipKey}, 15*60).Err()
+}
+
+func (c *AuthRecoveryController) clearLoginPhoneFailures(ctx context.Context, ownerType, phone string) error {
+	phoneKey, _ := c.loginRateKeys(ownerType, phone, "")
+	return c.RDB.Del(ctx, phoneKey).Err()
 }
