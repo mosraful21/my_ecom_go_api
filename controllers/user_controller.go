@@ -199,7 +199,7 @@ func (c *UserController) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	middleware.SetCookie(w, c.Cfg.CookieName, token)
+	middleware.SetCookie(w, c.Cfg.CookieName, token, c.Cfg.RecoveryCookieSecure)
 
 	utils.Success(w, http.StatusOK, "login successful", nil)
 }
@@ -219,7 +219,7 @@ func (c *UserController) Logout(w http.ResponseWriter, r *http.Request) {
 		)
 
 		if dbErr != nil {
-			middleware.ClearCookie(w, c.Cfg.CookieName)
+			middleware.ClearCookie(w, c.Cfg.CookieName, c.Cfg.RecoveryCookieSecure)
 			utils.Error(w, http.StatusInternalServerError, "failed to terminate session")
 			return
 		}
@@ -758,11 +758,8 @@ func (c *UserController) ForgotPassword(w http.ResponseWriter, r *http.Request) 
 
 func (c *UserController) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-
 	var req models.UserVerifyOTPRequest
-	if !decodeJSON(w, r, &req) {
-		return
-	}
+	if !decodeJSON(w, r, &req) { return }
 
 	otp := strings.TrimSpace(req.OTP)
 	if !utils.ValidateOTPFormat(otp) {
@@ -772,184 +769,74 @@ func (c *UserController) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 
 	const ownerType = "user"
 	const cookieName = "user_password_recovery"
-
 	sessionID, err := utils.GetRecoveryCookie(r, cookieName)
 	if err != nil {
 		utils.Error(w, http.StatusUnauthorized, "recovery session required")
 		return
 	}
 
-	session, err := c.getRecoverySession(ctx, sessionID)
-	if err != nil {
-		utils.Error(w, http.StatusUnauthorized, "invalid or expired recovery session")
-		return
-	}
-
-	if session.OwnerType != ownerType {
-		utils.Error(w, http.StatusUnauthorized, "invalid recovery session")
-		return
-	}
-
 	now := time.Now().Unix()
-
-	if session.OTPVerified {
-		utils.Error(w, http.StatusUnauthorized, "otp already verified")
-		return
-	}
-
-	if session.OTPExpiresAt <= now {
-		utils.Error(w, http.StatusUnauthorized, "otp expired")
-		return
-	}
-
-	if session.OTPAttempts >= config.MaxOTPAttempts {
-		utils.Error(w, http.StatusUnauthorized, "maximum otp attempts exceeded")
-		return
-	}
-
-	inputHash := utils.HashOTP(c.Cfg.RecoverySecret, sessionID, otp)
-
-	if !utils.ConstantTimeEqual(inputHash, session.OTPHash) {
-		session.OTPAttempts++
-
-		if err := c.saveRecoverySession(ctx, sessionID, session); err != nil {
-			utils.Error(w, http.StatusInternalServerError, "failed to update otp attempts")
-			return
-		}
-
-		if err := c.auditPasswordReset(
-			ctx,
-			ownerType,
-			&session.OwnerID,
-			session.Phone,
-			"otp_failed",
-			getClientIP(r),
-			r.UserAgent(),
-		); err != nil {
-			fmt.Printf("user password reset audit failed: %v", err)
-		}
-
-		utils.Error(w, http.StatusUnauthorized, "invalid otp")
-		return
-	}
-
 	resetToken, err := utils.RandomToken()
 	if err != nil {
 		utils.Error(w, http.StatusInternalServerError, "reset token creation failed")
 		return
 	}
+	inputHash := utils.HashOTP(c.Cfg.RecoverySecret, sessionID, otp)
+	resetHash := utils.HashResetToken(c.Cfg.RecoverySecret, sessionID, resetToken)
 
-	session.OTPVerified = true
-	session.ResetTokenHash = utils.HashResetToken(
-		c.Cfg.RecoverySecret,
-		sessionID,
-		resetToken,
+	status, session, err := c.verifyOTPAtomic(
+		ctx, sessionID, ownerType, inputHash, resetHash, now, now+config.ResetTokenTTL,
 	)
-	session.ResetTokenExpiresAt = now + config.ResetTokenTTL
-
-	if err := c.saveRecoverySession(ctx, sessionID, session); err != nil {
-		utils.Error(w, http.StatusInternalServerError, "reset token storage failed")
+	if err != nil {
+		utils.Error(w, http.StatusInternalServerError, "failed to verify otp")
 		return
 	}
 
-	if err := c.auditPasswordReset(
-		ctx,
-		ownerType,
-		&session.OwnerID,
-		session.Phone,
-		"otp_verified",
-		getClientIP(r),
-		r.UserAgent(),
-	); err != nil {
-		fmt.Printf("user password reset audit failed: %v", err)
+	switch status {
+	case 1:
+		if err := c.auditPasswordReset(ctx, ownerType, &session.OwnerID, session.Phone, "otp_verified", getClientIP(r), r.UserAgent()); err != nil {
+			fmt.Printf("user password reset audit failed: %v\n", err)
+		}
+		utils.Success(w, http.StatusOK, "otp verified successfully", models.UserResetTokenResponse{ResetToken: resetToken})
+	case 0:
+		if err := c.auditPasswordReset(ctx, ownerType, &session.OwnerID, session.Phone, "otp_failed", getClientIP(r), r.UserAgent()); err != nil {
+			fmt.Printf("user password reset audit failed: %v\n", err)
+		}
+		utils.Error(w, http.StatusUnauthorized, "invalid otp")
+	case -1:
+		utils.Error(w, http.StatusUnauthorized, "invalid or expired recovery session")
+	case -2:
+		utils.Error(w, http.StatusUnauthorized, "invalid recovery session")
+	case -3:
+		utils.Error(w, http.StatusUnauthorized, "otp already verified")
+	case -4:
+		utils.Error(w, http.StatusUnauthorized, "otp expired")
+	case -5:
+		utils.Error(w, http.StatusUnauthorized, "maximum otp attempts exceeded")
+	default:
+		utils.Error(w, http.StatusInternalServerError, "failed to verify otp")
 	}
-
-	utils.Success(w, http.StatusOK, "otp verified successfully",
-		models.UserResetTokenResponse{
-			ResetToken: resetToken,
-		},
-	)
-}
-
-func (c *UserController) ResetPassword(w http.ResponseWriter, r *http.Request) {
+}func (c *UserController) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-
 	var req models.UserResetPasswordRequest
-	if !decodeJSON(w, r, &req) {
-		return
-	}
+	if !decodeJSON(w, r, &req) { return }
 
 	resetToken := strings.TrimSpace(req.ResetToken)
 	password := req.Password
-
 	if resetToken == "" {
 		utils.Error(w, http.StatusBadRequest, "reset_token is required")
 		return
 	}
-
 	if err := utils.ValidatePassword(password); err != nil {
 		utils.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	const (
-		ownerType  = "user"
-		cookieName = "user_password_recovery"
-	)
-
+	const ownerType = "user"
+	const cookieName = "user_password_recovery"
 	sessionID, err := utils.GetRecoveryCookie(r, cookieName)
 	if err != nil {
 		utils.Error(w, http.StatusUnauthorized, "recovery session required")
-		return
-	}
-
-	session, err := c.getRecoverySession(ctx, sessionID)
-	if err != nil {
-		utils.Error(w, http.StatusUnauthorized, "invalid or expired recovery session")
-		return
-	}
-
-	if session.OwnerType != ownerType {
-		utils.Error(w, http.StatusUnauthorized, "invalid recovery session")
-		return
-	}
-
-	if !session.OTPVerified {
-		utils.Error(w, http.StatusUnauthorized, "otp verification required")
-		return
-	}
-
-	now := time.Now().Unix()
-
-	auditFailure := func() {
-		if auditErr := c.auditPasswordReset(
-			ctx,
-			ownerType,
-			&session.OwnerID,
-			session.Phone,
-			"reset_failed",
-			getClientIP(r),
-			r.UserAgent(),
-		); auditErr != nil {
-			fmt.Printf("user password reset audit failed: %v", auditErr)
-		}
-	}
-
-	if session.ResetTokenExpiresAt <= now {
-		auditFailure()
-		utils.Error(w, http.StatusUnauthorized, "reset token expired")
-		return
-	}
-
-	tokenHash := utils.HashResetToken(
-		c.Cfg.RecoverySecret,
-		sessionID,
-		resetToken,
-	)
-
-	if !utils.ConstantTimeEqual(tokenHash, session.ResetTokenHash) {
-		auditFailure()
-		utils.Error(w, http.StatusUnauthorized, "invalid reset token")
 		return
 	}
 
@@ -959,85 +846,96 @@ func (c *UserController) ResetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	tokenHash := utils.HashResetToken(c.Cfg.RecoverySecret, sessionID, resetToken)
+	now := time.Now().Unix()
+	status, session, err := c.claimResetTokenAtomic(ctx, sessionID, ownerType, tokenHash, now)
+	if err != nil {
+		utils.Error(w, http.StatusInternalServerError, "failed to validate reset token")
+		return
+	}
+	if status != 1 {
+		if session.OwnerID > 0 {
+			if auditErr := c.auditPasswordReset(ctx, ownerType, &session.OwnerID, session.Phone, "reset_failed", getClientIP(r), r.UserAgent()); auditErr != nil {
+				fmt.Printf("user password reset audit failed: %v\n", auditErr)
+			}
+		}
+		switch status {
+		case -1, -2, -3, -5:
+			utils.Error(w, http.StatusUnauthorized, "invalid recovery session or reset token")
+		case -4:
+			utils.Error(w, http.StatusUnauthorized, "reset token expired")
+		case -6:
+			utils.Error(w, http.StatusConflict, "password reset is already in progress")
+		default:
+			utils.Error(w, http.StatusUnauthorized, "invalid recovery session or reset token")
+		}
+		return
+	}
+
+	releaseClaim := func() {
+		if releaseErr := c.releaseResetClaim(ctx, sessionID, tokenHash); releaseErr != nil {
+			fmt.Printf("user password reset claim release failed: %v\n", releaseErr)
+		}
+	}
 	tx, err := c.DB.BeginTx(ctx, nil)
 	if err != nil {
+		releaseClaim()
 		utils.Error(w, http.StatusInternalServerError, "password reset failed")
 		return
 	}
 	defer tx.Rollback()
 
-	result, err := tx.ExecContext(
-		ctx,
-		`UPDATE users
-		 SET password = ?,
-		     version = version + 1,
-		     updated_at = ?
-		 WHERE id = ?`,
-		passwordHash,
-		now,
-		session.OwnerID,
+	result, err := tx.ExecContext(ctx,
+		`UPDATE users SET password = ?, version = version + 1, updated_at = ? WHERE id = ?`,
+		passwordHash, now, session.OwnerID,
 	)
 	if err != nil {
+		releaseClaim()
 		utils.Error(w, http.StatusInternalServerError, "password reset failed")
 		return
 	}
-
 	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		utils.Error(w, http.StatusInternalServerError, "password reset failed")
-		return
-	}
-
-	if rowsAffected == 0 {
+	if err != nil || rowsAffected != 1 {
+		releaseClaim()
 		utils.Error(w, http.StatusUnauthorized, "invalid recovery session")
 		return
 	}
 
-	_, err = tx.ExecContext(
-		ctx,
-		`UPDATE auth_sessions
-		 SET revoked_at = ?
-		 WHERE user_id = ?
-		   AND revoked_at IS NULL`,
-		now,
-		session.OwnerID,
-	)
-	if err != nil {
+	if _, err = tx.ExecContext(ctx,
+		`UPDATE auth_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`,
+		now, session.OwnerID,
+	); err != nil {
+		releaseClaim()
 		utils.Error(w, http.StatusInternalServerError, "password reset failed")
 		return
 	}
 
-	_, err = tx.ExecContext(
-		ctx,
+	if _, err = tx.ExecContext(ctx,
 		`INSERT INTO password_reset_audits
 		 (owner_type, owner_id, phone_hash, event_type, ip_address, user_agent, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		ownerType,
-		session.OwnerID,
-		utils.HashPhone(c.Cfg.RecoverySecret, session.Phone),
-		"reset_success",
-		getClientIP(r),
-		r.UserAgent(),
-		now,
-	)
-	if err != nil {
+		ownerType, session.OwnerID, utils.HashPhone(c.Cfg.RecoverySecret, session.Phone),
+		"reset_success", getClientIP(r), r.UserAgent(), now,
+	); err != nil {
+		releaseClaim()
 		utils.Error(w, http.StatusInternalServerError, "password reset failed")
 		return
 	}
 
 	if err := tx.Commit(); err != nil {
+		releaseClaim()
 		utils.Error(w, http.StatusInternalServerError, "password reset failed")
 		return
 	}
 
-	if err := c.deleteRecoverySession(ctx, sessionID); err != nil {
-		fmt.Printf("user recovery session cleanup failed: %v", err)
+	// The token is claimed before the DB transaction, so concurrent reset requests
+	// cannot use it. Deleting the Redis key after commit makes it permanently one-time.
+	if err := c.consumeResetClaim(ctx, sessionID, tokenHash); err != nil {
+		fmt.Printf("user recovery session consumption failed: %v\n", err)
 	}
-
 	utils.ClearRecoveryCookie(w, cookieName, c.Cfg.RecoveryCookieSecure)
 	utils.Success(w, http.StatusOK, "password reset successful", nil)
 }
-
 func (c *UserController) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	if middleware.Type(r) != config.TypeAdmin {
 		utils.Error(w, http.StatusForbidden, "admin access required")
