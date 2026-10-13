@@ -199,7 +199,7 @@ func (c *UserController) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	middleware.SetCookie(w, c.Cfg.CookieName, token)
+	middleware.SetCookie(w, c.Cfg.CookieName, token, c.Cfg.RecoveryCookieSecure)
 
 	utils.Success(w, http.StatusOK, "login successful", nil)
 }
@@ -219,17 +219,17 @@ func (c *UserController) Logout(w http.ResponseWriter, r *http.Request) {
 		)
 
 		if dbErr != nil {
-			middleware.ClearCookie(w, c.Cfg.CookieName)
+			middleware.ClearCookie(w, c.Cfg.CookieName, c.Cfg.RecoveryCookieSecure)
 			utils.Error(w, http.StatusInternalServerError, "failed to terminate session")
 			return
 		}
 	} else if err != nil && !errors.Is(err, http.ErrNoCookie) {
-		middleware.ClearCookie(w, c.Cfg.CookieName)
+		middleware.ClearCookie(w, c.Cfg.CookieName, c.Cfg.RecoveryCookieSecure)
 		utils.Error(w, http.StatusBadRequest, "invalid session cookie")
 		return
 	}
 
-	middleware.ClearCookie(w, c.Cfg.CookieName)
+	middleware.ClearCookie(w, c.Cfg.CookieName, c.Cfg.RecoveryCookieSecure)
 
 	utils.Success(w, http.StatusOK, "logged out successfully", nil)
 }
