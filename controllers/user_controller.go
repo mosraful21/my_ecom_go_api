@@ -224,12 +224,12 @@ func (c *UserController) Logout(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else if err != nil && !errors.Is(err, http.ErrNoCookie) {
-		middleware.ClearCookie(w, c.Cfg.CookieName)
+		middleware.ClearCookie(w, c.Cfg.CookieName, c.Cfg.RecoveryCookieSecure)
 		utils.Error(w, http.StatusBadRequest, "invalid session cookie")
 		return
 	}
 
-	middleware.ClearCookie(w, c.Cfg.CookieName)
+	middleware.ClearCookie(w, c.Cfg.CookieName, c.Cfg.RecoveryCookieSecure)
 
 	utils.Success(w, http.StatusOK, "logged out successfully", nil)
 }
