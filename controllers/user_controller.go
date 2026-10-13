@@ -612,6 +612,10 @@ func (c *UserController) ChangePassword(w http.ResponseWriter, r *http.Request) 
 
 func (c *UserController) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	if len(c.Cfg.RecoverySecret) < 32 {
+		utils.Error(w, http.StatusServiceUnavailable, "password recovery is not configured")
+		return
+	}
 
 	var req models.UserForgotPasswordRequest
 	if !decodeJSON(w, r, &req) {
@@ -744,12 +748,13 @@ func (c *UserController) ForgotPassword(w http.ResponseWriter, r *http.Request) 
 			genericResponse()
 			return
 		}
+	} else if strings.EqualFold(c.Cfg.AppEnv, "development") {
+		fmt.Printf("[DEV ONLY] user password reset OTP: %s (expires in %d seconds)\\n", otp, config.OTPExpirySeconds)
 	} else {
-		fmt.Printf(
-			"[DEV ONLY] user password reset OTP: %s (expires in %d seconds)",
-			otp,
-			config.OTPExpirySeconds,
-		)
+		// Never log OTPs outside development. Without an SMS provider, fail closed.
+		_ = c.deleteRecoverySession(ctx, sessionID)
+		genericResponse()
+		return
 	}
 
 	utils.SetRecoveryCookie(w, cookieName, sessionID, c.Cfg.RecoveryCookieSecure, config.RecoverySessionTTL)
@@ -758,6 +763,10 @@ func (c *UserController) ForgotPassword(w http.ResponseWriter, r *http.Request) 
 
 func (c *UserController) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	if len(c.Cfg.RecoverySecret) < 32 {
+		utils.Error(w, http.StatusServiceUnavailable, "password recovery is not configured")
+		return
+	}
 	var req models.UserVerifyOTPRequest
 	if !decodeJSON(w, r, &req) { return }
 
@@ -818,6 +827,10 @@ func (c *UserController) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 	}
 }func (c *UserController) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	if len(c.Cfg.RecoverySecret) < 32 {
+		utils.Error(w, http.StatusServiceUnavailable, "password recovery is not configured")
+		return
+	}
 	var req models.UserResetPasswordRequest
 	if !decodeJSON(w, r, &req) { return }
 
@@ -923,7 +936,7 @@ func (c *UserController) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := tx.Commit(); err != nil {
-		releaseClaim()
+		// Commit errors can be ambiguous: keep the claim locked to prevent token replay.
 		utils.Error(w, http.StatusInternalServerError, "password reset failed")
 		return
 	}
