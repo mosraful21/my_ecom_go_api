@@ -3,6 +3,7 @@ package controllers
 import (
 	"database/sql"
 	"encoding/json"
+	"io"
 	"errors"
 	"fmt"
 	"net/http"
@@ -70,8 +71,16 @@ func scanAdmin(s rowScanner, a *models.Admin) error {
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
-	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(dst); err != nil {
 		utils.Error(w, http.StatusBadRequest, "invalid request")
+		return false
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		utils.Error(w, http.StatusBadRequest, "request must contain a single JSON object")
 		return false
 	}
 	return true
