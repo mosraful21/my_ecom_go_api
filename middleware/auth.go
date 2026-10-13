@@ -35,23 +35,24 @@ func CreateSession(db *sql.DB, ownerType int, ownerID int64) (string, error) {
 	return token, err
 }
 
-func SetCookie(w http.ResponseWriter, name, token string) {
+const SessionTTL = 30 * 24 * time.Hour
+
+func SetCookie(w http.ResponseWriter, name, token string, secure bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     name,
 		Value:    token,
 		Path:     "/",
-		MaxAge:   400 * 24 * 60 * 60,
+		MaxAge:   int(SessionTTL.Seconds()),
 		HttpOnly: true,
-		// Secure:   true, // for production lavel
-		Secure:   false,
+		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
 	})
 }
 
-func ClearCookie(w http.ResponseWriter, name string) {
+func ClearCookie(w http.ResponseWriter, name string, secure bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name: name, Value: "", Path: "/", MaxAge: -1,
-		HttpOnly: true, Secure: false, SameSite: http.SameSiteLaxMode,
+		HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode,
 	})
 }
 
@@ -65,10 +66,10 @@ func Require(cfg *config.Config, db *sql.DB) func(http.Handler) http.Handler {
 			}
 
 			var userID, adminID sql.NullInt64
-			var revokedAt sql.NullInt64
-			err = db.QueryRowContext(r.Context(), `SELECT user_id, admin_id, revoked_at FROM auth_sessions WHERE token_hash=?`,
-				utils.HashToken(cookie.Value)).Scan(&userID, &adminID, &revokedAt)
-			if err != nil || revokedAt.Valid {
+			var revokedAt, createdAt sql.NullInt64
+			err = db.QueryRowContext(r.Context(), `SELECT user_id, admin_id, revoked_at, created_at FROM auth_sessions WHERE token_hash=?`,
+				utils.HashToken(cookie.Value)).Scan(&userID, &adminID, &revokedAt, &createdAt)
+			if err != nil || revokedAt.Valid || !createdAt.Valid || time.Since(time.Unix(createdAt.Int64, 0)) >= SessionTTL {
 				utils.Error(w, http.StatusUnauthorized, "invalid or logged out session")
 				return
 			}
@@ -99,7 +100,7 @@ func Require(cfg *config.Config, db *sql.DB) func(http.Handler) http.Handler {
 				return
 			}
 
-			SetCookie(w, cfg.CookieName, cookie.Value)
+			SetCookie(w, cfg.CookieName, cookie.Value, cfg.RecoveryCookieSecure)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
