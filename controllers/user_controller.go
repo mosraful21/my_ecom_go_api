@@ -851,7 +851,9 @@ func (c *UserController) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		utils.Error(w, http.StatusInternalServerError, "failed to verify otp")
 	}
-}func (c *UserController) ResetPassword(w http.ResponseWriter, r *http.Request) {
+}
+
+func (c *UserController) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if len(c.Cfg.RecoverySecret) < 32 {
 		utils.Error(w, http.StatusServiceUnavailable, "password recovery is not configured")
