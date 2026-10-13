@@ -127,8 +127,21 @@ func (c *AdminController) Login(w http.ResponseWriter, r *http.Request) {
 		&a.Status,
 	)
 
-	if err != nil || !utils.CheckPassword(a.Password, q.Password) {
-		if rateErr := c.recordFailedLogin(r.Context(), "admin", q.Phone, ip); rateErr != nil { fmt.Printf("admin login throttle update failed: %v\n", rateErr) }
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			if rateErr := c.recordFailedLogin(r.Context(), "admin", q.Phone, ip); rateErr != nil {
+				fmt.Printf("admin login throttle update failed: %v\n", rateErr)
+			}
+			utils.Error(w, http.StatusUnauthorized, "invalid credentials")
+			return
+		}
+		utils.Error(w, http.StatusInternalServerError, "login failed")
+		return
+	}
+	if !utils.CheckPassword(a.Password, q.Password) {
+		if rateErr := c.recordFailedLogin(r.Context(), "admin", q.Phone, ip); rateErr != nil {
+			fmt.Printf("admin login throttle update failed: %v\n", rateErr)
+		}
 		utils.Error(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
