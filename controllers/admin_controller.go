@@ -154,18 +154,28 @@ func (c *AdminController) Login(w http.ResponseWriter, r *http.Request) {
 func (c *AdminController) Logout(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie(c.Cfg.CookieName)
 	if err == nil && cookie.Value != "" {
-		_, _ = c.DB.ExecContext(
+		_, dbErr := c.DB.ExecContext(
 			r.Context(),
-			`UPDATE auth_sessions 
-			 SET revoked_at=? 
-			 WHERE token_hash=? 
-			 AND revoked_at IS NULL`,
+			`UPDATE auth_sessions
+			 SET revoked_at = ?
+			 WHERE token_hash = ?
+			   AND revoked_at IS NULL`,
 			time.Now().Unix(),
-			utils.HashToken(cookie.Value))
+			utils.HashToken(cookie.Value),
+		)
+		if dbErr != nil {
+			middleware.ClearCookie(w, c.Cfg.CookieName, c.Cfg.RecoveryCookieSecure)
+			utils.Error(w, http.StatusInternalServerError, "failed to terminate session")
+			return
+		}
+	} else if err != nil && !errors.Is(err, http.ErrNoCookie) {
+		middleware.ClearCookie(w, c.Cfg.CookieName, c.Cfg.RecoveryCookieSecure)
+		utils.Error(w, http.StatusBadRequest, "invalid session cookie")
+		return
 	}
-	middleware.ClearCookie(w, c.Cfg.CookieName, c.Cfg.RecoveryCookieSecure)
 
-	utils.Success(w, http.StatusOK, "logged out", nil)
+	middleware.ClearCookie(w, c.Cfg.CookieName, c.Cfg.RecoveryCookieSecure)
+	utils.Success(w, http.StatusOK, "logged out successfully", nil)
 }
 
 func (c *AdminController) GetMe(w http.ResponseWriter, r *http.Request) {
