@@ -124,7 +124,7 @@ func (c *AdminController) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	middleware.SetCookie(w, c.Cfg.CookieName, token)
+	middleware.SetCookie(w, c.Cfg.CookieName, token, c.Cfg.RecoveryCookieSecure)
 
 	utils.Success(w, http.StatusOK, "login successful", nil)
 }
@@ -141,7 +141,7 @@ func (c *AdminController) Logout(w http.ResponseWriter, r *http.Request) {
 			time.Now().Unix(),
 			utils.HashToken(cookie.Value))
 	}
-	middleware.ClearCookie(w, c.Cfg.CookieName)
+	middleware.ClearCookie(w, c.Cfg.CookieName, c.Cfg.RecoveryCookieSecure)
 
 	utils.Success(w, http.StatusOK, "logged out", nil)
 }
