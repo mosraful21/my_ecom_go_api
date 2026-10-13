@@ -182,11 +182,6 @@ type recoveryScriptResult struct {
 }
 
 
-type recoveryScriptResult struct {
-	Status int `json:"status"`
-	Session models.RecoverySession `json:"session"`
-}
-
 
 func (c *AuthRecoveryController) verifyOTPAtomic(
 	ctx context.Context, sessionID, ownerType, inputHash, resetTokenHash string,
