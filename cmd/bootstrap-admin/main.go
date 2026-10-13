@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -60,9 +59,6 @@ func main() {
 	)
 	if err != nil {
 		// The count check and insert can race; a unique phone constraint still protects duplicates.
-		if errors.Is(err, nil) {
-			fmt.Fprintln(os.Stderr, "failed to create bootstrap administrator")
-		}
 		log.Fatalf("failed to create bootstrap administrator: %v", err)
 	}
 
