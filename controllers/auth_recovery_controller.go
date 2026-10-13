@@ -101,3 +101,130 @@ func (c *AuthRecoveryController) deleteRecoverySession(ctx context.Context, sess
 		recoveryKey(sessionID),
 	).Err()
 }
+
+
+// verifyOTPScript atomically checks OTP state, increments failed attempts, and
+// issues the reset-token hash. It preserves the recovery key's remaining TTL.
+var verifyOTPScript = redis.NewScript(`
+local raw = redis.call('GET', KEYS[1])
+if not raw then return cjson.encode({status=-1}) end
+local s = cjson.decode(raw)
+if s.owner_type ~= ARGV[1] then return cjson.encode({status=-2, session=s}) end
+if s.otp_verified == true then return cjson.encode({status=-3, session=s}) end
+if tonumber(s.otp_expires_at or 0) <= tonumber(ARGV[2]) then
+  return cjson.encode({status=-4, session=s})
+end
+if tonumber(s.otp_attempts or 0) >= tonumber(ARGV[5]) then
+  return cjson.encode({status=-5, session=s})
+end
+if s.otp_hash ~= ARGV[3] then
+  s.otp_attempts = tonumber(s.otp_attempts or 0) + 1
+  local ttl = redis.call('PTTL', KEYS[1])
+  if ttl <= 0 then return cjson.encode({status=-1}) end
+  redis.call('SET', KEYS[1], cjson.encode(s), 'PX', ttl)
+  return cjson.encode({status=0, session=s})
+end
+s.otp_verified = true
+s.reset_token_hash = ARGV[4]
+s.reset_token_expires_at = tonumber(ARGV[6])
+s.reset_in_progress = false
+local ttl = redis.call('PTTL', KEYS[1])
+if ttl <= 0 then return cjson.encode({status=-1}) end
+redis.call('SET', KEYS[1], cjson.encode(s), 'PX', ttl)
+return cjson.encode({status=1, session=s})
+`)
+
+// claimResetScript atomically claims a valid reset token so concurrent requests
+// cannot reset the same account simultaneously.
+var claimResetScript = redis.NewScript(`
+local raw = redis.call('GET', KEYS[1])
+if not raw then return cjson.encode({status=-1}) end
+local s = cjson.decode(raw)
+if s.owner_type ~= ARGV[1] then return cjson.encode({status=-2, session=s}) end
+if s.otp_verified ~= true then return cjson.encode({status=-3, session=s}) end
+if tonumber(s.reset_token_expires_at or 0) <= tonumber(ARGV[2]) then
+  return cjson.encode({status=-4, session=s})
+end
+if s.reset_token_hash ~= ARGV[3] then return cjson.encode({status=-5, session=s}) end
+if s.reset_in_progress == true then return cjson.encode({status=-6, session=s}) end
+s.reset_in_progress = true
+local ttl = redis.call('PTTL', KEYS[1])
+if ttl <= 0 then return cjson.encode({status=-1}) end
+redis.call('SET', KEYS[1], cjson.encode(s), 'PX', ttl)
+return cjson.encode({status=1, session=s})
+`)
+
+var releaseResetClaimScript = redis.NewScript(`
+local raw = redis.call('GET', KEYS[1])
+if not raw then return 0 end
+local s = cjson.decode(raw)
+if s.reset_token_hash ~= ARGV[1] or s.reset_in_progress ~= true then return 0 end
+s.reset_in_progress = false
+local ttl = redis.call('PTTL', KEYS[1])
+if ttl <= 0 then return 0 end
+redis.call('SET', KEYS[1], cjson.encode(s), 'PX', ttl)
+return 1
+`)
+
+var consumeResetClaimScript = redis.NewScript(`
+local raw = redis.call('GET', KEYS[1])
+if not raw then return 0 end
+local s = cjson.decode(raw)
+if s.reset_token_hash ~= ARGV[1] or s.reset_in_progress ~= true then return 0 end
+return redis.call('DEL', KEYS[1])
+`)
+
+// forgotPasswordRateLimitScript atomically limits by owner phone and by IP.
+// KEYS[1] is scoped to user/admin phone; KEYS[2] is shared across both types.
+var forgotPasswordRateLimitScript = redis.NewScript(`
+local phoneCount = redis.call('INCR', KEYS[1])
+if phoneCount == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
+local ipCount = redis.call('INCR', KEYS[2])
+if ipCount == 1 then redis.call('EXPIRE', KEYS[2], ARGV[2]) end
+if phoneCount > tonumber(ARGV[3]) or ipCount > tonumber(ARGV[4]) then return 0 end
+return 1
+`)
+
+type recoveryScriptResult struct {
+	Status  int                    `json:"status"`
+	Session models.RecoverySession `json:"session"`
+}
+
+func (c *AuthRecoveryController) verifyOTPAtomic(
+	ctx context.Context, sessionID, ownerType, inputHash, resetTokenHash string,
+	now, resetExpiresAt int64,
+) (int, models.RecoverySession, error) {
+	var result recoveryScriptResult
+	raw, err := verifyOTPScript.Run(ctx, c.RDB, []string{recoveryKey(sessionID)},
+		ownerType, now, inputHash, resetTokenHash, config.MaxOTPAttempts, resetExpiresAt).Text()
+	if err != nil { return 0, result.Session, err }
+	if err := json.Unmarshal([]byte(raw), &result); err != nil { return 0, result.Session, err }
+	return result.Status, result.Session, nil
+}
+
+func (c *AuthRecoveryController) claimResetTokenAtomic(
+	ctx context.Context, sessionID, ownerType, tokenHash string, now int64,
+) (int, models.RecoverySession, error) {
+	var result recoveryScriptResult
+	raw, err := claimResetScript.Run(ctx, c.RDB, []string{recoveryKey(sessionID)}, ownerType, now, tokenHash).Text()
+	if err != nil { return 0, result.Session, err }
+	if err := json.Unmarshal([]byte(raw), &result); err != nil { return 0, result.Session, err }
+	return result.Status, result.Session, nil
+}
+
+func (c *AuthRecoveryController) releaseResetClaim(ctx context.Context, sessionID, tokenHash string) error {
+	return releaseResetClaimScript.Run(ctx, c.RDB, []string{recoveryKey(sessionID)}, tokenHash).Err()
+}
+
+func (c *AuthRecoveryController) consumeResetClaim(ctx context.Context, sessionID, tokenHash string) error {
+	return consumeResetClaimScript.Run(ctx, c.RDB, []string{recoveryKey(sessionID)}, tokenHash).Err()
+}
+
+func (c *AuthRecoveryController) allowForgotPassword(ctx context.Context, ownerType, phone, ip string) (bool, error) {
+	phoneKey := "password_recovery_rate:phone:" + ownerType + ":" + utils.HashPhone(c.Cfg.RecoverySecret, phone)
+	ipKey := "password_recovery_rate:ip:" + utils.HashPhone(c.Cfg.RecoverySecret, ip)
+	allowed, err := forgotPasswordRateLimitScript.Run(ctx, c.RDB, []string{phoneKey, ipKey},
+		config.ForgotPasswordCooldown, 15*60, config.MaxForgotPasswordRequests, 20).Int()
+	if err != nil { return false, err }
+	return allowed == 1, nil
+}
