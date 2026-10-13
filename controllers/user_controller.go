@@ -128,6 +128,11 @@ func (c *UserController) Register(w http.ResponseWriter, r *http.Request) {
 		now,
 	)
 	if err != nil {
+		var mysqlErr *mysql.MySQLError
+		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+			utils.Error(w, http.StatusConflict, "phone number already exists")
+			return
+		}
 		utils.Error(w, http.StatusInternalServerError, "failed to register user")
 		return
 	}
