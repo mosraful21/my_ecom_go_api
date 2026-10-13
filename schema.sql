@@ -91,4 +91,4 @@ CREATE TABLE
   ) ENGINE = InnoDB;
 
 
-INSERT INTO admin (name, phone, password, role, created_at, updated_at) VALUES ('Habib', '01774514821', '$2a$12$XHQaLlerOGzrKZ9X4xoIrOp6b0A7n8WcVJEn38ZUk0F74DnEwmdOG', 1, UNIX_TIMESTAMP () ,UNIX_TIMESTAMP ());
+-- Create the first administrator with: go run ./cmd/bootstrap-admin
