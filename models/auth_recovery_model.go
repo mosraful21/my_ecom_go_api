@@ -10,4 +10,5 @@ type RecoverySession struct {
 	OTPVerified         bool   `json:"otp_verified"`
 	ResetTokenHash      string `json:"reset_token_hash"`
 	ResetTokenExpiresAt int64  `json:"reset_token_expires_at"`
+	ResetInProgress     bool   `json:"reset_in_progress,omitempty"`
 }
