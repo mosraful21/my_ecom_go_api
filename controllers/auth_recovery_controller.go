@@ -225,8 +225,15 @@ func (c *AuthRecoveryController) consumeResetClaim(ctx context.Context, sessionI
 func (c *AuthRecoveryController) allowForgotPassword(ctx context.Context, ownerType, phone, ip string) (bool, error) {
 	phoneKey := "password_recovery_rate:phone:" + ownerType + ":" + utils.HashPhone(c.Cfg.RecoverySecret, phone)
 	ipKey := "password_recovery_rate:ip:" + utils.HashPhone(c.Cfg.RecoverySecret, ip)
-	allowed, err := forgotPasswordRateLimitScript.Run(ctx, c.RDB, []string{phoneKey, ipKey},
-		config.ForgotPasswordCooldown, 15*60, config.MaxForgotPasswordRequests, 20).Int()
+	allowed, err := forgotPasswordRateLimitScript.Run(
+		ctx,
+		c.RDB,
+		[]string{phoneKey, ipKey},
+		config.ForgotPasswordCooldown,
+		config.ForgotPasswordIPWindowSeconds,
+		config.MaxForgotPasswordRequests,
+		config.MaxForgotPasswordRequestsPerIP,
+	).Int()
 	if err != nil {
 		return false, err
 	}

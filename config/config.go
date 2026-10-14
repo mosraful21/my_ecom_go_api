@@ -21,12 +21,15 @@ const (
 	StatusInactive = 2
 	StatusBan      = 3
 
-	RecoverySessionTTL        = 5 * 60
+	MaxForgotPasswordRequests = 5
+	MaxOTPAttempts            = 5
 	OTPExpirySeconds          = 5 * 60
-	MaxOTPAttempts            = 3
 	ResetTokenTTL             = 5 * 60
-	MaxForgotPasswordRequests = 3
+	RecoverySessionTTL        = 5 * 60
 	ForgotPasswordCooldown    = 24 * 60 * 60
+
+	ForgotPasswordIPWindowSeconds  = 10 * 60
+	MaxForgotPasswordRequestsPerIP = 20
 )
 
 type Config struct {
