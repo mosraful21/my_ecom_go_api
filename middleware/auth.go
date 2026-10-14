@@ -19,7 +19,7 @@ const (
 	AdminRole key = "admin_role"
 )
 
-const SessionTTL = 365 * 24 * 60 * 60 // 365 days
+const SessionTTL = 365 * 24 * 60 * 60
 
 func CreateSession(db *sql.DB, ownerType int, ownerID int64) (string, error) {
 	if db == nil || ownerID <= 0 {
@@ -132,7 +132,7 @@ func Require(cfg *config.Config, db *sql.DB) func(http.Handler) http.Handler {
 			now := time.Now()
 
 			if created.After(now) ||
-				now.Sub(created) >= SessionTTL {
+				now.Sub(created) >= time.Duration(SessionTTL)*time.Second {
 				utils.Error(w, http.StatusUnauthorized, "session expired")
 				return
 			}
