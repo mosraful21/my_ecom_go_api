@@ -359,13 +359,8 @@ func (c *AdminController) UpdateMe(w http.ResponseWriter, r *http.Request) {
 
 	if len(fields) == 0 {
 		if imageChanged {
-			_ = utils.DeleteImage(
-				c.Cfg.StoragePath,
-				"admin",
-				newImage,
-			)
+			_ = utils.DeleteImage(c.Cfg.StoragePath, "admin", newImage)
 		}
-
 		utils.Error(w, http.StatusBadRequest, "nothing to update")
 		return
 	}
@@ -1220,12 +1215,7 @@ func (c *AdminController) Update(w http.ResponseWriter, r *http.Request) {
 		file, header, fileErr := r.FormFile("image")
 
 		if fileErr == nil {
-			newImage, err = utils.SaveImage(
-				file,
-				header,
-				c.Cfg.StoragePath,
-				"admin",
-			)
+			newImage, err = utils.SaveImage(file, header, c.Cfg.StoragePath, "admin")
 			_ = file.Close()
 
 			if err != nil {
