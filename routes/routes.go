@@ -84,12 +84,12 @@ func Setup(db *sql.DB, cfg *config.Config, redisClient *redis.Client) http.Handl
 				r.Use(auth, adminAndManager)
 				r.Get("/", adminController.GetAdmin)
 				r.Get("/{id}", adminController.GetAdminByID)
+				r.Put("/{id}", adminController.Update)
 			})
 
 			r.Group(func(r chi.Router) {
 				r.Use(auth, onlyAdmin)
 				r.Post("/create", adminController.CreateAdmin)
-				r.Put("/{id}", adminController.Update)
 				r.Patch("/{id}/status", adminController.UpdateStatus)
 				r.Delete("/{id}", adminController.Delete)
 			})

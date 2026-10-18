@@ -62,7 +62,7 @@ CREATE TABLE
   ) ENGINE = InnoDB;
 
 CREATE TABLE
-  password_reset_audits (
+  IF NOT EXISTS password_reset_audits (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     owner_type VARCHAR(20) NOT NULL,
     owner_id BIGINT UNSIGNED NULL,

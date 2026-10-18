@@ -371,7 +371,7 @@ func (c *UserController) UpdateMe(w http.ResponseWriter, r *http.Request) {
 				file,
 				header,
 				c.Cfg.StoragePath,
-				"user",
+				"users",
 			)
 
 			if err != nil {
@@ -425,11 +425,7 @@ func (c *UserController) UpdateMe(w http.ResponseWriter, r *http.Request) {
 
 	if len(fields) == 0 {
 		if imageChanged {
-			_ = utils.DeleteImage(
-				c.Cfg.StoragePath,
-				"user",
-				newImage,
-			)
+			_ = utils.DeleteImage(c.Cfg.StoragePath, "users", newImage)
 		}
 
 		utils.Error(w, http.StatusBadRequest, "nothing to update")
@@ -449,11 +445,7 @@ func (c *UserController) UpdateMe(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		if imageChanged {
-			_ = utils.DeleteImage(
-				c.Cfg.StoragePath,
-				"user",
-				newImage,
-			)
+			_ = utils.DeleteImage(c.Cfg.StoragePath, "users", newImage)
 		}
 
 		utils.Error(w, http.StatusConflict, "update failed")
@@ -464,11 +456,7 @@ func (c *UserController) UpdateMe(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		if imageChanged {
-			_ = utils.DeleteImage(
-				c.Cfg.StoragePath,
-				"user",
-				newImage,
-			)
+			_ = utils.DeleteImage(c.Cfg.StoragePath, "users", newImage)
 		}
 
 		utils.Error(w, http.StatusInternalServerError, "failed to check update")
@@ -477,11 +465,7 @@ func (c *UserController) UpdateMe(w http.ResponseWriter, r *http.Request) {
 
 	if affected == 0 {
 		if imageChanged {
-			_ = utils.DeleteImage(
-				c.Cfg.StoragePath,
-				"user",
-				newImage,
-			)
+			_ = utils.DeleteImage(c.Cfg.StoragePath, "users", newImage)
 		}
 
 		utils.Error(w, http.StatusNotFound, "user not found")
@@ -490,11 +474,7 @@ func (c *UserController) UpdateMe(w http.ResponseWriter, r *http.Request) {
 
 	if imageChanged || removeImage {
 		if oldImage.Valid && oldImage.String != "" {
-			_ = utils.DeleteImage(
-				c.Cfg.StoragePath,
-				"user",
-				oldImage.String,
-			)
+			_ = utils.DeleteImage(c.Cfg.StoragePath, "users", oldImage.String)
 		}
 	}
 
@@ -1247,7 +1227,7 @@ func (c *UserController) Update(w http.ResponseWriter, r *http.Request) {
 				file,
 				header,
 				c.Cfg.StoragePath,
-				"user",
+				"users",
 			)
 			_ = file.Close()
 
@@ -1274,7 +1254,7 @@ func (c *UserController) Update(w http.ResponseWriter, r *http.Request) {
 		*q.Phone = strings.TrimSpace(*q.Phone)
 		if err := utils.ValidatePhone(*q.Phone); err != nil {
 			if imageChanged {
-				_ = utils.DeleteImage(c.Cfg.StoragePath, "user", newImage)
+				_ = utils.DeleteImage(c.Cfg.StoragePath, "users", newImage)
 			}
 			utils.Error(w, http.StatusBadRequest, err.Error())
 			return
@@ -1326,7 +1306,7 @@ func (c *UserController) Update(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		if imageChanged {
-			_ = utils.DeleteImage(c.Cfg.StoragePath, "user", newImage)
+			_ = utils.DeleteImage(c.Cfg.StoragePath, "users", newImage)
 		}
 		var mysqlErr *mysql.MySQLError
 		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
@@ -1340,7 +1320,7 @@ func (c *UserController) Update(w http.ResponseWriter, r *http.Request) {
 	affected, err := result.RowsAffected()
 	if err != nil {
 		if imageChanged {
-			_ = utils.DeleteImage(c.Cfg.StoragePath, "user", newImage)
+			_ = utils.DeleteImage(c.Cfg.StoragePath, "users", newImage)
 		}
 		utils.Error(w, http.StatusInternalServerError, "failed to check update")
 		return
@@ -1354,7 +1334,7 @@ func (c *UserController) Update(w http.ResponseWriter, r *http.Request) {
 
 		if err != nil {
 			if imageChanged {
-				_ = utils.DeleteImage(c.Cfg.StoragePath, "user", newImage)
+				_ = utils.DeleteImage(c.Cfg.StoragePath, "users", newImage)
 			}
 			utils.Error(w, http.StatusInternalServerError, "failed to verify user")
 			return
@@ -1362,7 +1342,7 @@ func (c *UserController) Update(w http.ResponseWriter, r *http.Request) {
 
 		if !exists {
 			if imageChanged {
-				_ = utils.DeleteImage(c.Cfg.StoragePath, "user", newImage)
+				_ = utils.DeleteImage(c.Cfg.StoragePath, "users", newImage)
 			}
 			utils.Error(w, http.StatusNotFound, "user not found")
 			return
@@ -1372,7 +1352,7 @@ func (c *UserController) Update(w http.ResponseWriter, r *http.Request) {
 	if (imageChanged || removeImage) && oldImage.Valid && oldImage.String != "" {
 		if err := utils.DeleteImage(
 			c.Cfg.StoragePath,
-			"user",
+			"users",
 			oldImage.String,
 		); err != nil {
 			utils.Error(w, http.StatusInternalServerError, "user updated but old image deletion failed")
@@ -1552,7 +1532,7 @@ func (c *UserController) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if image.Valid && image.String != "" {
-		_ = utils.DeleteImage(c.Cfg.StoragePath, "user", image.String)
+		_ = utils.DeleteImage(c.Cfg.StoragePath, "users", image.String)
 	}
 
 	utils.Success(w, http.StatusOK, "user deleted successfully", nil)
